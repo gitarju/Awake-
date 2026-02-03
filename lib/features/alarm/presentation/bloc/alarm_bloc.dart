@@ -38,19 +38,40 @@ class AlarmBloc extends Bloc<AlarmEvent, AlarmState> {
     ToggleAlarm event,
     Emitter<AlarmState> emit,
   ) async {
-    await _repository.toggleAlarm(event.id, event.isEnabled);
-    // Determine if we need to schedule or cancel
-    final alarm = state.alarms.firstWhere((a) => a.id == event.id);
-    if (event.isEnabled) {
-      // Need to reschedule. Logic for finding next occurrence happens in Scheduler usually, but for now assuming time is absolute or we calculate next time.
-      // Simplification: We just schedule the stored time. If it's past, it won't fire or will fire immediately depending on API.
-      // Ideally we calculate next instance.
-      await _scheduler.scheduleAlarm(alarm);
-    } else {
-      await _scheduler.cancelAlarm(alarm);
-    }
+    try {
+      final alarm = state.alarms.firstWhere((a) => a.id == event.id);
 
-    add(LoadAlarms());
+      if (event.isEnabled) {
+        // Recalculate next occurrence
+        final now = DateTime.now();
+        var scheduledTime = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          alarm.time.hour,
+          alarm.time.minute,
+        );
+
+        if (scheduledTime.isBefore(now)) {
+          scheduledTime = scheduledTime.add(const Duration(days: 1));
+        }
+
+        final updatedAlarm = alarm.copyWith(
+          isEnabled: true,
+          time: scheduledTime,
+        );
+
+        await _repository.saveAlarm(updatedAlarm);
+        await _scheduler.scheduleAlarm(updatedAlarm);
+      } else {
+        await _repository.toggleAlarm(event.id, false);
+        await _scheduler.cancelAlarm(alarm);
+      }
+
+      add(LoadAlarms());
+    } catch (e) {
+      debugPrint('Error toggling alarm: $e');
+    }
   }
 
   Future<void> _onDeleteAlarm(
